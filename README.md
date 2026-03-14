@@ -6,14 +6,17 @@ Tools for converting AI conversation exports to browsable HTML files.
 
 ## chatgpt_export_to_html.py
 
-Converts a ChatGPT `conversations.json` export into HTML files, one per conversation, plus an index.
+Converts a ChatGPT `conversations.json` export into HTML and/or Markdown files, one per conversation, plus an index.
 
 Output structure:
 ```
 <output_dir>/
-├── index_chatgpt.html
-└── chatgpt_html_files/
-    └── <conversation-id>.html
+├── index_chatgpt.html        (HTML format)
+├── index_chatgpt.md          (Markdown format)
+├── chatgpt_html_files/
+│   └── <conversation-id>.html
+└── chatgpt_md_files/
+    └── <conversation-id>.md
 ```
 
 Re-running is safe: existing conversations in the index are preserved even if they are no longer in the new export (e.g. because you deleted them from your ChatGPT account). New conversations are added and existing ones are refreshed.
@@ -47,10 +50,16 @@ python3 chatgpt_export_to_html.py conversations.json [output_dir] [options]
 positional arguments:
   conversations.json    ChatGPT export file
   output_dir            Output directory (default: same directory as input file).
-                        Conversation files go in a chatgpt_html_files/ subfolder;
-                        the index goes directly in this directory.
+                        Conversation files go in a chatgpt_html_files/ or chatgpt_md_files/
+                        subfolder; the index goes directly in this directory.
 
 options:
+  --format FORMAT       Output format (default: html)
+                          html      → chatgpt_html_files/  (one .html per conversation)
+                          markdown  → chatgpt_md_files/    (one .md  per conversation)
+                          both      → both directories in one run
+                        Markdown output is always conversation-only.
+
   --timezone TIMEZONE   Timezone for message timestamps (default: system timezone)
                         Examples:
                           --timezone "America/Los_Angeles"   (San Francisco)
@@ -59,21 +68,24 @@ options:
                           --timezone "Europe/London"         (London)
 
   --conversation-only   Output only user and assistant messages,
-                        no metadata or tool calls
+                        no metadata or tool calls (HTML only)
 ```
 
 ---
 
 ## claude_export_to_html.py
 
-Converts an Anthropic/Claude `conversations.json` export into HTML files, one per conversation, plus an index. Preserves rich content including thinking blocks, tool use, and tool results.
+Converts an Anthropic/Claude `conversations.json` export into HTML and/or Markdown files, one per conversation, plus an index. Preserves rich content including thinking blocks, tool use, and tool results (HTML only).
 
 Output structure:
 ```
 <output_dir>/
-├── index_claude.html
-└── claude_html_files/
-    └── <conversation-uuid>.html
+├── index_claude.html         (HTML format)
+├── index_claude.md           (Markdown format)
+├── claude_html_files/
+│   └── <conversation-uuid>.html
+└── claude_md_files/
+    └── <conversation-uuid>.md
 ```
 
 Re-running is safe: same incremental behavior as the ChatGPT script above.
@@ -106,10 +118,16 @@ python3 claude_export_to_html.py conversations.json [output_dir] [options]
 positional arguments:
   conversations.json    Claude export file
   output_dir            Output directory (default: same directory as input file).
-                        Conversation files go in a claude_html_files/ subfolder;
-                        the index goes directly in this directory.
+                        Conversation files go in a claude_html_files/ or claude_md_files/
+                        subfolder; the index goes directly in this directory.
 
 options:
+  --format FORMAT       Output format (default: html)
+                          html      → claude_html_files/  (one .html per conversation)
+                          markdown  → claude_md_files/    (one .md  per conversation)
+                          both      → both directories in one run
+                        Markdown output is always conversation-only.
+
   --timezone TIMEZONE   Timezone for message timestamps (default: system timezone)
                         Examples:
                           --timezone "America/Los_Angeles"   (San Francisco)
@@ -118,7 +136,7 @@ options:
                           --timezone "Europe/London"         (London)
 
   --conversation-only   Output only user and assistant messages,
-                        no metadata or tool calls
+                        no metadata or tool calls (HTML only)
 ```
 
 ### How to export your Claude data

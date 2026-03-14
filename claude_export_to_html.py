@@ -56,8 +56,8 @@ def to_local_str(timestamp, tz) -> str:
         return f"Unknown time ({timestamp})"
 
 
-def render_content_blocks(content_blocks, clean=False):
-    """Render content blocks into HTML, distinguishing thinking, tool use, tool results, and text."""
+def render_content_blocks(content_blocks, clean=False, fmt="html"):
+    """Render content blocks into HTML or markdown text."""
     parts = []
 
     for block in content_blocks:
@@ -66,9 +66,11 @@ def render_content_blocks(content_blocks, clean=False):
 
         block_type = block.get("type", "")
 
+        # Markdown is always conversation-only: skip thinking, tool_use, tool_result
+        if fmt == "markdown" and block_type in {"thinking", "tool_use", "tool_result"}:
+            continue
         if clean and block_type in {"thinking", "tool_use", "tool_result"}:
             continue
-
 
         if block_type == "thinking":
             thinking_text = block.get("thinking", "")
@@ -76,13 +78,10 @@ def render_content_blocks(content_blocks, clean=False):
                 continue
             style = BLOCK_STYLES["thinking"]
             label = BLOCK_LABELS["thinking"]
-            # Render summaries if present
             summaries = block.get("summaries", [])
             summary_hint = ""
             if summaries:
-                summary_texts = [
-                    s.get("summary", "") for s in summaries if s.get("summary")
-                ]
+                summary_texts = [s.get("summary", "") for s in summaries if s.get("summary")]
                 if summary_texts:
                     summary_hint = f" — {html.escape(summary_texts[0])}"
             parts.append(
@@ -126,7 +125,6 @@ def render_content_blocks(content_blocks, clean=False):
             style = BLOCK_STYLES["tool_result"]
             label = BLOCK_LABELS["tool_result"]
 
-            # Extract text from content array
             result_text = ""
             result_content = block.get("content", [])
             if isinstance(result_content, list):
@@ -134,7 +132,6 @@ def render_content_blocks(content_blocks, clean=False):
                     if isinstance(item, dict) and item.get("type") == "text":
                         result_text += item.get("text", "")
 
-            # Show display_content titles if available
             display = block.get("display_content", {})
             display_items = ""
             if display and isinstance(display, dict):
@@ -152,7 +149,6 @@ def render_content_blocks(content_blocks, clean=False):
 
             error_flag = " \u26a0\ufe0f ERROR" if is_error else ""
 
-            # Truncate very long tool results
             if len(result_text) > 2000:
                 result_text = result_text[:2000] + "\n... [truncated]"
 
@@ -169,20 +165,21 @@ def render_content_blocks(content_blocks, clean=False):
         elif block_type == "text":
             text = block.get("text", "")
             if text.strip():
-                parts.append(_md(text))
+                parts.append(_md(text) if fmt == "html" else text.strip())
 
         else:
             # Unknown block type - render what we can
             text = block.get("text", "") or block.get("content", "")
             if isinstance(text, str) and text.strip():
-                parts.append(
-                    f"<div><em>[{html.escape(block_type)}]</em> {_md(text)}</div>"
-                )
+                if fmt == "html":
+                    parts.append(f"<div><em>[{html.escape(block_type)}]</em> {_md(text)}</div>")
+                else:
+                    parts.append(f"*[{block_type}]* {text.strip()}")
 
     return "\n".join(parts)
 
 
-def extract_messages(conversation, tz, clean=False):
+def extract_messages(conversation, tz, clean=False, fmt="html"):
     """Extract messages from a Claude conversation, preserving content block structure."""
     messages = []
     chat_messages = conversation.get("chat_messages", [])
@@ -193,15 +190,13 @@ def extract_messages(conversation, tz, clean=False):
         author = ROLE_NAMES.get(sender, sender.capitalize())
         timestamp = to_local_str(msg.get("created_at"), tz)
 
-        # Render structured content blocks (thinking, tool_use, tool_result, text)
         if isinstance(content_blocks, list) and content_blocks:
-            rendered = render_content_blocks(content_blocks, clean=clean)
+            rendered = render_content_blocks(content_blocks, clean=clean, fmt=fmt)
         else:
-            # Fallback to plain text field
             text = msg.get("text", "")
             if not text.strip():
                 continue
-            rendered = _md(text)
+            rendered = _md(text) if fmt == "html" else text.strip()
 
         if not rendered.strip():
             continue
@@ -218,7 +213,7 @@ def extract_messages(conversation, tz, clean=False):
 
 
 def load_existing_index(index_path):
-    """Parse an existing index HTML file and return a dict of {uuid: (date_str, li_html)}."""
+    """Parse an existing HTML index file and return a dict of {uuid: (date_str, li_html)}."""
     if not index_path.exists():
         return {}
     content = index_path.read_text(encoding="utf-8")
@@ -228,6 +223,20 @@ def load_existing_index(index_path):
         date_match = re.search(r'>(\d{4}-\d{2}-\d{2})\s', li)
         if uuid_match and date_match:
             entries[uuid_match.group(1)] = (date_match.group(1), li)
+    return entries
+
+
+def load_existing_md_index(index_path):
+    """Parse an existing markdown index file and return a dict of {uuid: (date_str, line)}."""
+    if not index_path.exists():
+        return {}
+    content = index_path.read_text(encoding="utf-8")
+    entries = {}
+    for line in re.findall(r'- \[.*?\]\(.*?\)', content):
+        uuid_match = re.search(r'\(([a-f0-9-]{36})\)', line)
+        date_match = re.search(r'\[(\d{4}-\d{2}-\d{2})\s', line)
+        if uuid_match and date_match:
+            entries[uuid_match.group(1)] = (date_match.group(1), line)
     return entries
 
 
@@ -248,7 +257,7 @@ GLOBAL_CSS = """
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Converts Anthropic/Claude data export conversations.json to HTML files."
+        description="Converts Anthropic/Claude data export conversations.json to HTML and/or Markdown files."
     )
     parser.add_argument("input", metavar="conversations.json", help="Input JSON export file")
     parser.add_argument(
@@ -256,12 +265,19 @@ def main():
         nargs="?",
         help=(
             "Output directory (default: same directory as input file). "
-            "Conversation files go in a claude_html_files/ subfolder; "
+            "Conversation files go in a claude_html_files/ or claude_md_files/ subfolder; "
             "the index goes directly in this directory."
         ),
     )
     parser.add_argument("--timezone", default=None, help="Timezone name (e.g. 'America/New_York'). Defaults to system timezone.")
-    parser.add_argument("--conversation-only", action="store_true", help="Output only user and assistant messages, no metadata or tool calls.")
+    parser.add_argument("--conversation-only", action="store_true", help="Output only user and assistant messages, no metadata or tool calls. HTML only; markdown is always conversation-only.")
+    parser.add_argument(
+        "--format",
+        choices=["html", "markdown", "both"],
+        default="html",
+        metavar="FORMAT",
+        help="Output format: html (default), markdown, or both. Markdown is always conversation-only.",
+    )
     args = parser.parse_args()
 
     if args.timezone:
@@ -281,124 +297,140 @@ def main():
 
     input_path = Path(args.input)
     base_dir = Path(args.output_dir) if args.output_dir else input_path.parent
-    conv_dir = base_dir / "claude_html_files"
-    index_path = base_dir / "index_claude.html"
-    conv_dir.mkdir(parents=True, exist_ok=True)
+    fmt = args.format
+
+    html_conv_dir = base_dir / "claude_html_files"
+    html_index_path = base_dir / "index_claude.html"
+    md_conv_dir = base_dir / "claude_md_files"
+    md_index_path = base_dir / "index_claude.md"
+
+    if fmt in ("html", "both"):
+        html_conv_dir.mkdir(parents=True, exist_ok=True)
+    if fmt in ("markdown", "both"):
+        md_conv_dir.mkdir(parents=True, exist_ok=True)
 
     with input_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
     print(f"Loaded {len(data)} conversations from {input_path.name}")
 
-    # Load existing index entries (for incremental updates)
-    existing_entries = load_existing_index(index_path)
-    new_entries = {}
+    existing_html_entries = load_existing_index(html_index_path) if fmt in ("html", "both") else {}
+    existing_md_entries = load_existing_md_index(md_index_path) if fmt in ("markdown", "both") else {}
+    new_html_entries = {}
+    new_md_entries = {}
     skipped = 0
 
     for conversation in data:
-        messages = extract_messages(conversation, tz, clean=args.conversation_only)
-        if not messages:
-            skipped += 1
-            continue
-
-        last_user_message = next(
-            (msg for msg in reversed(messages) if msg["author"] == "User"), None
-        )
-        if not last_user_message:
-            skipped += 1
-            continue
-
         conv_uuid = conversation.get("uuid", "unknown")
         title = conversation.get("name", "") or "Untitled Chat"
-        filename = f"{conv_uuid}.html"
-
-        # Build metadata section
-        metadata_html = '<details style="background-color: #eef; padding: 10px; margin-bottom: 20px; border-radius: 4px;"><summary style="cursor: pointer;"><strong>Conversation Metadata</strong></summary>'
-
-        if conv_uuid:
-            metadata_html += (
-                f"<p><strong>UUID:</strong> <code>{html.escape(conv_uuid)}</code></p>"
-            )
-
-        created = to_local_str(conversation.get("created_at"), tz)
-        updated = to_local_str(conversation.get("updated_at"), tz)
-        metadata_html += f"<p><strong>Created:</strong> {html.escape(created)}</p>"
-        metadata_html += f"<p><strong>Updated:</strong> {html.escape(updated)}</p>"
-
-        # Account info
-        account = conversation.get("account", {})
-        if account and isinstance(account, dict):
-            acc_uuid = account.get("uuid", "")
-            if acc_uuid:
-                metadata_html += (
-                    f"<p><strong>Account:</strong> <code>{html.escape(acc_uuid)}</code></p>"
-                )
-
-        # Project info
-        project = conversation.get("project")
-        if project and isinstance(project, dict):
-            project_name = project.get("name", "")
-            if project_name:
-                metadata_html += (
-                    f"<p><strong>Project:</strong> {html.escape(project_name)}</p>"
-                )
-
-        # Summary
-        summary = conversation.get("summary", "")
-        if summary and summary.strip():
-            metadata_html += f'<div style="margin-top: 8px; padding: 8px; background: #e8eaf6; border-radius: 4px;"><strong>Summary:</strong><br>{_md(summary)}</div>'
-
-        metadata_html += "</details>"
-
-        # Build full HTML
-        html_content = f'<!DOCTYPE html><html><head><meta charset="UTF-8"><title>{html.escape(title)}</title>{GLOBAL_CSS}</head><body>'
-        html_content += f"<h2>{html.escape(title)}</h2>"
-        if not args.conversation_only:
-            html_content += metadata_html
-
-        for message in messages:
-            color = "#f0f0f0" if message["author"] == "User" else "#ffffff"
-            border = "border: 1px solid #ddd; border-radius: 4px;"
-            html_content += f'<div style="background-color: {color}; padding: 12px; margin: 8px 0; {border}">'
-            html_content += f'<p style="margin-top: 0;"><strong>{message["author"]}</strong> <span style="color: #888; font-size: 0.85em;">at {message["timestamp"]}</span></p>'
-            html_content += message["content"]
-            html_content += "</div>"
-
-        html_content += "</body></html>"
-
-        output_file = conv_dir / filename
-        with output_file.open("w", encoding="utf-8") as f:
-            f.write(html_content)
-        print(f"Saved: {output_file.name}")
-
         updated_at = conversation.get("updated_at", "")
         date_str = to_local_str(updated_at, tz).split()[0] if updated_at else "0000-00-00"
-        link_text = f"{date_str} {title} ({conv_uuid})"
-        href = f"claude_html_files/{filename}"
-        new_entries[conv_uuid] = (date_str, f'<li><a href="{href}">{html.escape(link_text)}</a></li>')
+        has_output = False
 
-    # Merge: existing entries + new entries (new wins on collision)
-    merged = {**existing_entries, **new_entries}
-    # Remove entries whose HTML file no longer exists on disk
-    merged = {uid: v for uid, v in merged.items() if (conv_dir / f"{uid}.html").exists()}
-    # Sort by date descending
-    sorted_entries = sorted(merged.values(), key=lambda x: x[0], reverse=True)
+        # --- HTML output ---
+        if fmt in ("html", "both"):
+            messages = extract_messages(conversation, tz, clean=args.conversation_only, fmt="html")
+            if messages and any(m["author"] == "User" for m in messages):
+                has_output = True
+                filename = f"{conv_uuid}.html"
 
-    if sorted_entries:
-        with index_path.open("w", encoding="utf-8") as f:
-            f.write(
-                f'<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Claude Chat Index</title>{GLOBAL_CSS}</head><body>'
-            )
-            f.write(
-                f"<h1>Claude Chat Index</h1><p>{len(sorted_entries)} conversations</p><ul>"
-            )
-            f.write("\n".join(li for _, li in sorted_entries))
-            f.write("</ul></body></html>")
-        print(f"\nIndex written to: {index_path}")
+                metadata_html = '<details style="background-color: #eef; padding: 10px; margin-bottom: 20px; border-radius: 4px;"><summary style="cursor: pointer;"><strong>Conversation Metadata</strong></summary>'
+                if conv_uuid:
+                    metadata_html += f"<p><strong>UUID:</strong> <code>{html.escape(conv_uuid)}</code></p>"
+                created = to_local_str(conversation.get("created_at"), tz)
+                updated = to_local_str(conversation.get("updated_at"), tz)
+                metadata_html += f"<p><strong>Created:</strong> {html.escape(created)}</p>"
+                metadata_html += f"<p><strong>Updated:</strong> {html.escape(updated)}</p>"
+                account = conversation.get("account", {})
+                if account and isinstance(account, dict):
+                    acc_uuid = account.get("uuid", "")
+                    if acc_uuid:
+                        metadata_html += f"<p><strong>Account:</strong> <code>{html.escape(acc_uuid)}</code></p>"
+                project = conversation.get("project")
+                if project and isinstance(project, dict):
+                    project_name = project.get("name", "")
+                    if project_name:
+                        metadata_html += f"<p><strong>Project:</strong> {html.escape(project_name)}</p>"
+                summary = conversation.get("summary", "")
+                if summary and summary.strip():
+                    metadata_html += f'<div style="margin-top: 8px; padding: 8px; background: #e8eaf6; border-radius: 4px;"><strong>Summary:</strong><br>{_md(summary)}</div>'
+                metadata_html += "</details>"
 
-    print(
-        f"\nDone: {len(new_entries)} conversations exported, {skipped} skipped (empty/no user messages)"
-    )
+                html_content = f'<!DOCTYPE html><html><head><meta charset="UTF-8"><title>{html.escape(title)}</title>{GLOBAL_CSS}</head><body>'
+                html_content += f"<h2>{html.escape(title)}</h2>"
+                if not args.conversation_only:
+                    html_content += metadata_html
+                for message in messages:
+                    color = "#f0f0f0" if message["author"] == "User" else "#ffffff"
+                    border = "border: 1px solid #ddd; border-radius: 4px;"
+                    html_content += f'<div style="background-color: {color}; padding: 12px; margin: 8px 0; {border}">'
+                    html_content += f'<p style="margin-top: 0;"><strong>{message["author"]}</strong> <span style="color: #888; font-size: 0.85em;">at {message["timestamp"]}</span></p>'
+                    html_content += message["content"]
+                    html_content += "</div>"
+                html_content += "</body></html>"
+
+                output_file = html_conv_dir / filename
+                output_file.write_text(html_content, encoding="utf-8")
+                print(f"Saved: {output_file.name}")
+
+                link_text = f"{date_str} {title} ({conv_uuid})"
+                href = f"claude_html_files/{filename}"
+                new_html_entries[conv_uuid] = (date_str, f'<li><a href="{href}">{html.escape(link_text)}</a></li>')
+
+        # --- Markdown output ---
+        if fmt in ("markdown", "both"):
+            messages = extract_messages(conversation, tz, clean=True, fmt="markdown")
+            if messages and any(m["author"] == "User" for m in messages):
+                has_output = True
+                filename = f"{conv_uuid}.md"
+
+                lines = [f"# {title}", "", f"*UUID: {conv_uuid}*", "", "---", ""]
+                for message in messages:
+                    lines.append(f"**{message['author']}** — {message['timestamp']}")
+                    lines.append("")
+                    lines.append(message["content"])
+                    lines.append("")
+                    lines.append("---")
+                    lines.append("")
+
+                output_file = md_conv_dir / filename
+                output_file.write_text("\n".join(lines), encoding="utf-8")
+                print(f"Saved: {output_file.name}")
+
+                link_text = f"{date_str} {title} ({conv_uuid})"
+                href = f"claude_md_files/{filename}"
+                new_md_entries[conv_uuid] = (date_str, f"- [{link_text}]({href})")
+
+        if not has_output:
+            skipped += 1
+
+    # Write HTML index
+    if fmt in ("html", "both"):
+        merged = {**existing_html_entries, **new_html_entries}
+        merged = {uid: v for uid, v in merged.items() if (html_conv_dir / f"{uid}.html").exists()}
+        sorted_entries = sorted(merged.values(), key=lambda x: x[0], reverse=True)
+        if sorted_entries:
+            with html_index_path.open("w", encoding="utf-8") as f:
+                f.write(f'<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Claude Chat Index</title>{GLOBAL_CSS}</head><body>')
+                f.write(f"<h1>Claude Chat Index</h1><p>{len(sorted_entries)} conversations</p><ul>")
+                f.write("\n".join(li for _, li in sorted_entries))
+                f.write("</ul></body></html>")
+            print(f"\nIndex written to: {html_index_path}")
+
+    # Write Markdown index
+    if fmt in ("markdown", "both"):
+        merged = {**existing_md_entries, **new_md_entries}
+        merged = {uid: v for uid, v in merged.items() if (md_conv_dir / f"{uid}.md").exists()}
+        sorted_entries = sorted(merged.values(), key=lambda x: x[0], reverse=True)
+        if sorted_entries:
+            with md_index_path.open("w", encoding="utf-8") as f:
+                f.write(f"# Claude Chat Index\n\n{len(sorted_entries)} conversations\n\n")
+                f.write("\n".join(line for _, line in sorted_entries))
+                f.write("\n")
+            print(f"\nIndex written to: {md_index_path}")
+
+    total = max(len(new_html_entries), len(new_md_entries))
+    print(f"\nDone: {total} conversations exported, {skipped} skipped (empty/no user messages)")
 
 
 if __name__ == "__main__":
