@@ -8,6 +8,16 @@ Tools for converting AI conversation exports to browsable HTML files.
 
 Converts a ChatGPT `conversations.json` export into HTML files, one per conversation, plus an index.
 
+Output structure:
+```
+<output_dir>/
+├── index_chatgpt.html
+└── chatgpt_html_files/
+    └── <conversation-id>.html
+```
+
+Re-running is safe: existing conversations in the index are preserved even if they are no longer in the new export (e.g. because you deleted them from your ChatGPT account). New conversations are added and existing ones are refreshed.
+
 ### Quick start
 
 1. Go to [chatgpt.com](https://chatgpt.com/) -> Settings -> Data controls -> **Export data**
@@ -20,7 +30,7 @@ Converts a ChatGPT `conversations.json` export into HTML files, one per conversa
    pip install -r requirements.txt
    python3 chatgpt_export_to_html.py conversations.json
    ```
-5. Open `chatgpt_html_files/index_chatgpt.html` in your browser
+5. Open `index_chatgpt.html` in your browser
 
 ### Returning users
 
@@ -36,7 +46,9 @@ python3 chatgpt_export_to_html.py conversations.json [output_dir] [options]
 
 positional arguments:
   conversations.json    ChatGPT export file
-  output_dir            Output directory (default: <input_dir>/chatgpt_html_files)
+  output_dir            Output directory (default: same directory as input file).
+                        Conversation files go in a chatgpt_html_files/ subfolder;
+                        the index goes directly in this directory.
 
 options:
   --timezone TIMEZONE   Timezone for message timestamps (default: system timezone)
@@ -55,6 +67,16 @@ options:
 ## claude_export_to_html.py
 
 Converts an Anthropic/Claude `conversations.json` export into HTML files, one per conversation, plus an index. Preserves rich content including thinking blocks, tool use, and tool results.
+
+Output structure:
+```
+<output_dir>/
+├── index_claude.html
+└── claude_html_files/
+    └── <conversation-uuid>.html
+```
+
+Re-running is safe: same incremental behavior as the ChatGPT script above.
 
 ### Setup
 
@@ -76,8 +98,6 @@ source .venv/bin/activate       # activate the environment
 python3 claude_export_to_html.py conversations.json
 ```
 
-Output is written to `claude_html_files/` next to the input file by default.
-
 ### Options
 
 ```
@@ -85,7 +105,9 @@ python3 claude_export_to_html.py conversations.json [output_dir] [options]
 
 positional arguments:
   conversations.json    Claude export file
-  output_dir            Output directory (default: <input_dir>/claude_html_files)
+  output_dir            Output directory (default: same directory as input file).
+                        Conversation files go in a claude_html_files/ subfolder;
+                        the index goes directly in this directory.
 
 options:
   --timezone TIMEZONE   Timezone for message timestamps (default: system timezone)

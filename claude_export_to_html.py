@@ -1,6 +1,7 @@
 import argparse
 import html
 import json
+import re
 import sys
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
@@ -53,8 +54,6 @@ def to_local_str(timestamp, tz) -> str:
         return _to_utc(timestamp).astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
     except (ValueError, TypeError, OSError):
         return f"Unknown time ({timestamp})"
-
-
 
 
 def render_content_blocks(content_blocks, clean=False):
@@ -218,6 +217,20 @@ def extract_messages(conversation, tz, clean=False):
     return messages
 
 
+def load_existing_index(index_path):
+    """Parse an existing index HTML file and return a dict of {uuid: (date_str, li_html)}."""
+    if not index_path.exists():
+        return {}
+    content = index_path.read_text(encoding="utf-8")
+    entries = {}
+    for li in re.findall(r'<li>.*?</li>', content):
+        uuid_match = re.search(r'\(([a-f0-9-]{36})\)</a>', li)
+        date_match = re.search(r'>(\d{4}-\d{2}-\d{2})\s', li)
+        if uuid_match and date_match:
+            entries[uuid_match.group(1)] = (date_match.group(1), li)
+    return entries
+
+
 # ---------- MAIN SCRIPT ----------
 
 GLOBAL_CSS = """
@@ -238,7 +251,15 @@ def main():
         description="Converts Anthropic/Claude data export conversations.json to HTML files."
     )
     parser.add_argument("input", metavar="conversations.json", help="Input JSON export file")
-    parser.add_argument("output_dir", nargs="?", help="Output directory (default: <input_dir>/claude_html_files)")
+    parser.add_argument(
+        "output_dir",
+        nargs="?",
+        help=(
+            "Output directory (default: same directory as input file). "
+            "Conversation files go in a claude_html_files/ subfolder; "
+            "the index goes directly in this directory."
+        ),
+    )
     parser.add_argument("--timezone", default=None, help="Timezone name (e.g. 'America/New_York'). Defaults to system timezone.")
     parser.add_argument("--conversation-only", action="store_true", help="Output only user and assistant messages, no metadata or tool calls.")
     args = parser.parse_args()
@@ -259,15 +280,19 @@ def main():
         tz = get_localzone()
 
     input_path = Path(args.input)
-    output_dir = Path(args.output_dir) if args.output_dir else input_path.parent / "claude_html_files"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    base_dir = Path(args.output_dir) if args.output_dir else input_path.parent
+    conv_dir = base_dir / "claude_html_files"
+    index_path = base_dir / "index_claude.html"
+    conv_dir.mkdir(parents=True, exist_ok=True)
 
     with input_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
     print(f"Loaded {len(data)} conversations from {input_path.name}")
 
-    index_links = []
+    # Load existing index entries (for incremental updates)
+    existing_entries = load_existing_index(index_path)
+    new_entries = {}
     skipped = 0
 
     for conversation in data:
@@ -283,14 +308,13 @@ def main():
             skipped += 1
             continue
 
-        timestamp = last_user_message["timestamp"].split()[0]
+        conv_uuid = conversation.get("uuid", "unknown")
         title = conversation.get("name", "") or "Untitled Chat"
-        filename = f"{conversation.get('uuid', 'unknown')}.html"
+        filename = f"{conv_uuid}.html"
 
         # Build metadata section
         metadata_html = '<details style="background-color: #eef; padding: 10px; margin-bottom: 20px; border-radius: 4px;"><summary style="cursor: pointer;"><strong>Conversation Metadata</strong></summary>'
 
-        conv_uuid = conversation.get("uuid", "")
         if conv_uuid:
             metadata_html += (
                 f"<p><strong>UUID:</strong> <code>{html.escape(conv_uuid)}</code></p>"
@@ -342,32 +366,38 @@ def main():
 
         html_content += "</body></html>"
 
-        output_file = output_dir / filename
+        output_file = conv_dir / filename
         with output_file.open("w", encoding="utf-8") as f:
             f.write(html_content)
         print(f"Saved: {output_file.name}")
-        sort_key = conversation.get("updated_at", "")
-        index_links.append(
-            (sort_key, f'<li><a href="{output_file.name}">{html.escape(title)} ({timestamp})</a></li>')
-        )
 
-    # Generate index.html
-    if index_links:
-        index_links.sort(key=lambda x: x[0], reverse=True)
-        index_path = output_dir / "index_claude.html"
+        updated_at = conversation.get("updated_at", "")
+        date_str = to_local_str(updated_at, tz).split()[0] if updated_at else "0000-00-00"
+        link_text = f"{date_str} {title} ({conv_uuid})"
+        href = f"claude_html_files/{filename}"
+        new_entries[conv_uuid] = (date_str, f'<li><a href="{href}">{html.escape(link_text)}</a></li>')
+
+    # Merge: existing entries + new entries (new wins on collision)
+    merged = {**existing_entries, **new_entries}
+    # Remove entries whose HTML file no longer exists on disk
+    merged = {uid: v for uid, v in merged.items() if (conv_dir / f"{uid}.html").exists()}
+    # Sort by date descending
+    sorted_entries = sorted(merged.values(), key=lambda x: x[0], reverse=True)
+
+    if sorted_entries:
         with index_path.open("w", encoding="utf-8") as f:
             f.write(
                 f'<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Claude Chat Index</title>{GLOBAL_CSS}</head><body>'
             )
             f.write(
-                f"<h1>Claude Chat Index</h1><p>{len(index_links)} conversations</p><ul>"
+                f"<h1>Claude Chat Index</h1><p>{len(sorted_entries)} conversations</p><ul>"
             )
-            f.write("\n".join(link for _, link in index_links))
+            f.write("\n".join(li for _, li in sorted_entries))
             f.write("</ul></body></html>")
-        print(f"\nIndex written to: {index_path.name}")
+        print(f"\nIndex written to: {index_path}")
 
     print(
-        f"\nDone: {len(index_links)} conversations exported, {skipped} skipped (empty/no user messages)"
+        f"\nDone: {len(new_entries)} conversations exported, {skipped} skipped (empty/no user messages)"
     )
 
 
