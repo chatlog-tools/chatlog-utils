@@ -163,3 +163,47 @@ python3 split_json.py conversations.json [output_dir]
 ```
 
 Output goes to `split_conversations_json/` next to the input file by default.
+
+---
+
+## analysis/
+
+Usage statistics and charts from ChatGPT and/or Claude export files. Both scripts accept multiple input files and auto-detect the format.
+
+### usage_stats.py
+
+Prints a text table of message counts, word counts, and character counts broken down by year, month, week, and day.
+
+### plot_stats.py
+
+Generates three self-contained interactive HTML files using Plotly:
+- `usage_monthly.html`
+- `usage_weekly.html`
+- `usage_daily.html`
+
+### Setup
+
+**First time:**
+```bash
+python3 -m venv .venv           # create virtual environment (one-time)
+source .venv/bin/activate       # activate it (if you haven't already)
+pip install -r analysis/requirements.txt # (one-time)
+```
+
+**Next time:**
+```bash
+source .venv/bin/activate       # activate it (if you haven't already)
+```
+
+### Usage
+
+```bash
+python analysis/usage_stats.py file1.json [file2.json ...] [options]
+python analysis/plot_stats.py  file1.json [file2.json ...] [options]
+
+options:
+  --timezone TIMEZONE        Timezone for timestamps (default: system timezone)
+  --output-dir DIR           Output directory for HTML files (plot_stats.py only)
+  --start-date YYYY-MM-DD    Ignore messages before this date
+  --end-date   YYYY-MM-DD    Ignore messages after this date
+```
