@@ -105,3 +105,21 @@ options:
 2. Click **Export data**
 3. Download and unzip the archive
 4. Run the script on the `conversations.json` file inside
+
+---
+
+## split_json.py
+
+Splits a `conversations.json` export into individual JSON files, one per conversation.
+
+Useful if you want to inspect the raw data in a text editor. The full export file can easily be hundreds of MB, which crashes most editors. With this script, each conversation becomes its own small file you can open directly.
+
+No dependencies beyond the Python standard library.
+
+### Usage
+
+```bash
+python3 split_json.py conversations.json [output_dir]
+```
+
+Output goes to `split_conversations_json/` next to the input file by default.
